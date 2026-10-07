@@ -1,0 +1,72 @@
+name: wasm-build
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: "6.11.1"
+  EMSCRIPTEN_VERSION: "4.0.7"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSCRIPTEN_VERSION }}
+      - name: Qt host kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          dir: ${{ runner.temp }}/qt
+          set-env: false
+      - name: Qt WebAssembly kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: all_os
+          target: wasm
+          arch: wasm_singlethread
+          dir: ${{ runner.temp }}/qt
+          set-env: false
+      - name: Build
+        run: |
+          export QT_WASM_PREFIX="${{ runner.temp }}/qt/Qt/${QT_VERSION}/wasm_singlethread"
+          export QT_HOST_PATH="${{ runner.temp }}/qt/Qt/${QT_VERSION}/gcc_64"
+          ls "$QT_WASM_PREFIX" "$QT_HOST_PATH" || true
+          bash scripts/build-wasm.sh
+      - name: Static checks
+        run: bash tests/check-artifacts.sh wasm/dist
+      - name: Browser test
+        run: |
+          bash scripts/serve.sh 8080 &
+          sleep 2
+          npm i --no-save playwright && npx playwright install --with-deps chromium
+          node tests/e2e.mjs http://localhost:8080/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kde-wasm-dist
+          path: wasm/dist
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: wasm/dist
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
